@@ -35,20 +35,40 @@ movieData = readtable("movie_metadata.csv")
 
 
 #data discretization
-nbinsLarge = 5
+nbinsLarge = 7
 nbinsSmall = 3
 
-gross_edges = binedges(DiscretizeUniformCount(nbinsLarge), movieData[:gross])
-gross_discretizer = LinearDiscretizer(gross_edges);
-budget_edges = binedges(DiscretizeUniformCount(nbinsLarge), movieData[:budget])
-budget_discretizer = LinearDiscretizer(budget_edges);
+gross_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:gross])
+gross_discretizer = LinearDiscretizer(gross_edges)
 
-imdbScore_edges = binedges(DiscretizeUniformCount(nbinsLarge), movieData[:imdb_score])
-imdbScore_discretizer = LinearDiscretizer(imdbScore_edges);
-critic_edges = binedges(DiscretizeUniformCount(nbinsLarge), movieData[:num_critic_for_reviews])
-critic_discretizer = LinearDiscretizer(critic_edges);
+budget_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:budget])
+budget_discretizer = LinearDiscretizer(budget_edges)
 
+imdbScore_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:imdb_score])
+imdbScore_discretizer = LinearDiscretizer(imdbScore_edges)
 
+critic_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:num_critic_for_reviews])
+critic_discretizer = LinearDiscretizer(critic_edges)
+
+numMovieFacebookLikes_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:movie_facebook_likes])
+numMovieFacebookLikes_discretizer = LinearDiscretizer(numMovieFacebookLikes_edges)
+
+castMovieLikes_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:cast_total_facebook_likes])
+castMovieLikes_discretizer = LinearDiscretizer(castMovieLikes_edges)
+
+numFacesInPoster_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:facenumber_in_poster])
+numFacesInPoster_discretizer = LinearDiscretizer(numFacesInPoster_edges)
+
+directorFacebookLikes_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:director_facebook_likes])
+directorFacebookLikes_discretizer = LinearDiscretizer(directorFacebookLikes_edges)
+
+contentRating_discretizer = CategoricalDiscretizer(movieData[:content_rating])
+
+duration_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:duration])
+duration_discretizer = LinearDiscretizer(duration_edges)
+
+titleYear_edges = binedges(DiscretizeUniformWidth(nbinsLarge), movieData[:title_year])
+titleYear_discretizer = LinearDiscretizer(titleYear_edges)
 
 dataUndiscretized = DataFrame(
     gross = movieData[:gross], #encode(gross_discretizer, movieData[:gross]),
@@ -61,25 +81,39 @@ dataUndiscretized = DataFrame(
 dataDiscretized = DataFrame(
     gross = encode(gross_discretizer, movieData[:gross]),
     budget = encode(budget_discretizer, movieData[:budget]),
+    numGenres = movieData[:num_genres],
     imdbScore = encode(imdbScore_discretizer, movieData[:imdb_score]),
     numCriticReviews = encode(critic_discretizer, movieData[:num_critic_for_reviews]),
-    numGenres = movieData[:num_genres],
-)
+    numMovieFacebookLikes = encode(numMovieFacebookLikes_discretizer, movieData[:movie_facebook_likes]),
+    castMovieLikes = encode(castMovieLikes_discretizer, movieData[:cast_total_facebook_likes]),
+    numFacesInPoster = encode(numFacesInPoster_discretizer, movieData[:facenumber_in_poster]),
+    directorFacebookLikes = encode(directorFacebookLikes_discretizer, movieData[:director_facebook_likes]),
+    contentRating = encode(contentRating_discretizer, movieData[:content_rating]),
+    duration = encode(duration_discretizer, movieData[:duration]),
+    titleYear = encode(titleYear_discretizer, movieData[:title_year]),
+) 
+
+totalSize = length(dataDiscretized[1])
+percentageTrain = 0.7
+lastTrainExample = Int(floor(percentageTrain*totalSize))
 
 #writetable("output.csv", data)
-dataUndiscretized = dataUndiscretized[1:20,:]
-display(dataUndiscretized)
+#dataUndiscretized = dataUndiscretized[1:20,:]
+#display(dataUndiscretized)
 
-#dataDiscretized = dataDiscretized[1:1000,:]
-display(dataDiscretized)
+dataDiscretizedTrain = dataDiscretized[1:lastTrainExample,:]
+dataDiscretizedTest = dataDiscretized[lastTrainExample+1:totalSize,:]
+#display(dataDiscretizedTrain)
+#display(dataDiscretizedTest)
 
 #structure learning
-params = K2GraphSearch([:gross, :budget, :imdbScore, :numCriticReviews, :numGenres], 
-                       CategoricalCPD{Categorical{Float64}},
-                       max_n_parents=4)
-bn = fit(BayesNet, dataDiscretized, params)
+params = K2GraphSearch([:gross, :budget, :numGenres, :imdbScore, :numCriticReviews, :numMovieFacebookLikes, :castMovieLikes, :numFacesInPoster, :directorFacebookLikes, :contentRating, :duration, :titleYear],
+                        DiscreteCPD,
+                        max_n_parents=4)
+#CategoricalCPD{Categorical{Float64}}
+#DiscreteCPD
 
-table = rand_table_weighted(bn; nsamples=300, consistent_with=Assignment(:imdbScore=>4, :numCriticReviews=>3))
+bn = fit(BayesNet, dataDiscretizedTrain, params)
 
 function likelihoodWeightedSampling(table, value)
     numerator = 0
@@ -99,7 +133,7 @@ function getMostLikelyClass(table,numClasses)
     mostLikelyClass = -1
     for i = 1:numClasses
         likelihood = likelihoodWeightedSampling(table,i)
-        display(likelihood)
+        #display(likelihood)
         if likelihood > highestLikelihood
             highestLikelihood = likelihood
             mostLikelyClass = i
@@ -108,13 +142,37 @@ function getMostLikelyClass(table,numClasses)
     return mostLikelyClass
 end
 
-getMostLikelyClass(table,5)
+#getMostLikelyClass(table,5)
+
+function getPredictionError(testDataTable)
+    numMistakes = 0
+    for i = 1:length(testDataTable[:,1])
+        row = testDataTable[i,:]
+        gross = row[:gross][1]
+        budget = row[:budget][1]
+        imdbScore = row[:imdbScore][1]
+        numCriticReviews = row[:numCriticReviews][1]
+        numGenres = row[:numGenres][1]
+        
+        table = rand_table_weighted(bn; nsamples=300, consistent_with=Assignment(:budget=>budget,:imdbScore=>imdbScore,:numCriticReviews=>numCriticReviews, :numGenres=>numGenres))
+        
+        predictedGrossCategory = getMostLikelyClass(table,5)
+        
+        if predictedGrossCategory != gross
+            numMistakes += 1
+        end
+        
+    end
+    return numMistakes/length(testDataTable[:,1])
+end
+
+getPredictionError(dataDiscretizedTest)
 
 #structure learning
-params2 = K2GraphSearch([:gross, :budget, :imdbScore, :numCriticReviews, :numGenres], 
-                       ConditionalLinearGaussianCPD,
-                       max_n_parents=2)
-bn2 = fit(BayesNet, dataUndiscretized, params2)
+#params2 = K2GraphSearch([:gross, :budget, :imdbScore, :numCriticReviews, :numGenres], 
+#                       ConditionalLinearGaussianCPD,
+#                       max_n_parents=2)
+#bn2 = fit(BayesNet, dataUndiscretized, params2)
 
 params = GreedyHillClimbing(ScoreComponentCache(dataDiscretized), max_n_parents=3, prior=UniformPrior())
 bn = fit(DiscreteBayesNet, dataDiscretized, params)
